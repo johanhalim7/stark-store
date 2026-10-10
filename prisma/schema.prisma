@@ -1,0 +1,269 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PACKED
+  SHIPPED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          Role      @default(CUSTOMER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts  Account[]
+  sessions  Session[]
+  addresses Address[]
+  cartItems CartItem[]
+  orders    Order[]
+  reviews   Review[]
+}
+
+// --- Auth.js (NextAuth v5) models ---
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Address {
+  id            String  @id @default(cuid())
+  userId        String
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         String // "Rumah", "Kantor"
+  recipientName String
+  phone         String
+  provinceId    String
+  province      String
+  cityId        String
+  city          String
+  subdistrictId String?
+  subdistrict   String?
+  postalCode    String
+  detail        String // jalan, nomor rumah, patokan
+  isDefault     Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  image       String?
+  description String?
+  sortOrder   Int       @default(0)
+  products    Product[]
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique
+  description    String   @db.Text
+  price          Int // rupiah, harga dasar (dipakai bila varian tidak override)
+  compareAtPrice Int? // harga coret
+  images         String[]
+  weight         Int // gram, untuk hitung ongkir
+  sku            String?
+  isActive       Boolean  @default(true)
+  soldCount      Int      @default(0)
+  categoryId     String?
+  category       Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  variants   ProductVariant[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+  reviews    Review[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+model ProductVariant {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String // "Merah / L" atau "Standar" (dibuat otomatis bila produk tanpa varian)
+  sku       String?
+  price     Int? // override harga produk; null = pakai harga produk
+  stock     Int     @default(0)
+  isActive  Boolean @default(true)
+
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@unique([productId, name])
+  @@index([productId])
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  qty       Int
+  createdAt DateTime @default(now())
+
+  @@unique([userId, variantId])
+  @@index([userId])
+}
+
+model Order {
+  id             String      @id @default(cuid())
+  orderNumber    String      @unique // dipakai juga sebagai order_id Midtrans
+  userId         String
+  user           User        @relation(fields: [userId], references: [id])
+  status         OrderStatus @default(PENDING_PAYMENT)
+  subtotal       Int
+  shippingCost   Int
+  total          Int
+  courier        String
+  courierService String
+  addressSnapshot Json
+  snapToken      String?     @db.Text
+  expiresAt      DateTime
+  paidAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  items    OrderItem[]
+  payment  Payment?
+  shipment Shipment?
+  reviews  Review[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model OrderItem {
+  id          String          @id @default(cuid())
+  orderId     String
+  order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product         @relation(fields: [productId], references: [id])
+  variantId   String?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  name        String // snapshot nama produk
+  variantName String? // snapshot nama varian
+  image       String? // snapshot foto pertama
+  price       Int // snapshot harga rupiah saat checkout
+  qty         Int
+  weight      Int // snapshot berat gram per pcs
+}
+
+model Payment {
+  id                String   @id @default(cuid())
+  orderId           String   @unique
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  midtransOrderId   String   @unique
+  transactionStatus String   @default("pending")
+  fraudStatus       String?
+  paymentType       String?
+  grossAmount       Int
+  rawPayload        Json?
+  paidAt            DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Shipment {
+  id             String    @id @default(cuid())
+  orderId        String    @unique
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  courier        String
+  service        String
+  cost           Int
+  trackingNumber String?
+  shippedAt      DateTime?
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  title     String?
+  body      String?  @db.Text
+  images    String[]
+  isHidden  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([orderId, productId, userId])
+  @@index([productId])
+}
+
+model Banner {
+  id        String   @id @default(cuid())
+  title     String
+  subtitle  String?
+  image     String
+  link      String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
