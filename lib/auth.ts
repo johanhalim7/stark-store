@@ -51,6 +51,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(db),
   // JWT: proxy (edge) bisa baca sesi tanpa query DB
   session: { strategy: "jwt" },
+  // Wajib true di production agar Auth.js tidak melempar UntrustedHost
+  // (mis. bila deploy di luar Vercel / di balik proxy).
+  trustHost: true,
   providers,
   pages: { signIn: "/login" },
   callbacks: {
